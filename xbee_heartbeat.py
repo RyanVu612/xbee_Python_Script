@@ -23,6 +23,10 @@ def main():
     #Tell pymavlink we want MAVLink 2 framing
     mav.WIRE_PROTOCOL_VERSION = "2.0"
 
+    # set source IDs
+    mav.srcSystem = args.sysid
+    mav.srcComponent = args.compid
+
     interval = 1.0 / max(args.rate, 0.001)
     print(f"Sending HEARTBEAT on {args.port} at {args.baud} ({args.rate} Hz). Press Ctrl+C to stop.")
     try:
@@ -38,7 +42,7 @@ def main():
             )
             #send with our sysid/compid
             msg.pack(mav)
-            mav.send(msg, force_mavlink1=False, srcSystem=args.sysid, srcComponent=args.compid)
+            mav.send(msg)
 
             time.sleep(interval)
     except KeyboardInterrupt:
