@@ -1,54 +1,49 @@
-import argparse, time, sys
-import serial
-from pymavlink.dialects.v20 import common as mavlink2   # MAVLink 2
+from digi.xbee.devices import XBeeDevice, RemoteXBeeDevice
+from digi.xbee.models import XBee64BitAddress
+from pymavlink import mavutil
+import time
 
-def main():
-    ap = argparse.ArgumentParser(description="Send MAVLink HEARTBEAT over Xbee serial")
-    ap.add_argument("--port", required=True, help="Serial port for Xbee (e.g., /dev/ttyUSB0 or COM3)")
-    ap.add_argument("--baud", type=int, default=9600, help="Baud rate for serial communication (default: 9600)")
-    ap.add_argument("--sysid", type=int, default=255, help="Our MAVLink system id (255 = GCS/ground)")
-    ap.add_argument("--compid", type=int, default=190, help="Our MAVLink component id (190 = logger/UI; use 190-199)")
-    ap.add_argument("--rate", type=float, default=1.0, help="Heartbeat rate Hz (default: 1.0)")
-    ap.add_argument("--type", type=int, default=mavlink2.MAV_TYPE_GCS, help="MAV_TYPE_* (default GCS)")
-    ap.add_argument("--autopilot", type=int, default=mavlink2.MAV_AUTOPILOT_INVALID, help="MAV_AUTOPILOT_*")
-    ap.add_argument("--status", type=int, default=mavlink2.MAV_STATE_ACTIVE, help="MAV_STATE_*")
-    args = ap.parse_args()
+# --- XBee Configuration ---
+LOCAL_XBEE_PORT = "/dev/cu.USB#AQ015EBI"  # Replace with your local XBee's serial port
+REMOTE_XBEE_ADDRESS = "0013A20041D365C4" # Replace with the 64-bit address of the remote XBee
 
-    #Open serial to Xbee
-    ser = serial.Serial(args.port, args.baud, timeout=0)
+# --- MAVLink Configuration ---
+# Create a MAVLink connection (e.g., to a flight controller or simulator)
+# This example uses a UDP connection to a local simulator on port 14550
+# Adjust as needed for your setup (e.g., serial connection to a flight controller)
+master = mavutil.mavlink_connection('udpout:localhost:14550', baud=115200)
 
-    #Create a MAVLink connection object that writes to the same serial port file descriptor
-    # (pymavlink will frame/CRC the bytes for us)
-    mav = mavlink2.MAVLink(ser)
-    #Tell pymavlink we want MAVLink 2 framing
-    mav.WIRE_PROTOCOL_VERSION = "2.0"
+try:
+    # Initialize local XBee device
+    local_xbee = XBeeDevice(LOCAL_XBEE_PORT, 9600)
+    local_xbee.open()
 
-    # set source IDs
-    mav.srcSystem = args.sysid
-    mav.srcComponent = args.compid
+    # Initialize remote XBee device
+    remote_xbee = RemoteXBeeDevice(local_xbee, XBee64BitAddress.from_hex_string(REMOTE_XBEE_ADDRESS))
 
-    interval = 1.0 / max(args.rate, 0.001)
-    print(f"Sending HEARTBEAT on {args.port} at {args.baud} ({args.rate} Hz). Press Ctrl+C to stop.")
-    try:
-        while True:
-            #Create and send a HEARTBEAT message
-            #Fields: type, autopilot, base_mode, custom_mode, system_status
-            msg = mav.heartbeat_encode(
-                args.type,
-                args.autopilot,
-                0,  # base_mode (bitmask);
-                0,   # custom_mode (vehicle-specific)
-                args.status
-            )
-            #send with our sysid/compid
-            msg.pack(mav)
-            mav.send(msg)
+    print("XBee connected. Sending MAVLink heartbeats...")
 
-            time.sleep(interval)
-    except KeyboardInterrupt:
-        print("\nExiting...")
-    finally:
-        ser.close()
+    while True:
+        # Create a MAVLink heartbeat message
+        heartbeat_msg = master.mav.heartbeat_encode(
+            mavutil.mavlink.MAV_TYPE_GENERIC,
+            mavutil.mavlink.MAV_AUTOPILOT_GENERIC,
+            0, 0, 0, 0
+        )
 
-if __name__ == "__main__":
-    main()
+        # Convert MAVLink message to bytes
+        mavlink_data = heartbeat_msg.pack(master.mav)
+
+        # Send MAVLink data via XBee
+        local_xbee.send_data(remote_xbee, mavlink_data)
+        print(f"Sent MAVLink heartbeat: {heartbeat_msg.get_type()}")
+
+        time.sleep(1) # Send every second
+
+except Exception as e:
+    print(f"Error: {e}")
+
+finally:
+    if 'local_xbee' in locals() and local_xbee.is_open():
+        local_xbee.close()
+        print("XBee connection closed.")

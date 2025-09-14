@@ -1,40 +1,36 @@
-import serial
-from pymavlink.dialects.v20 import common as mavlink2  # MAVLink 2
+from digi.xbee.devices import XBeeDevice
+from pymavlink import mavutil
+import time
 
-# -----------------------------
-# SETTINGS
-# -----------------------------
-PORT = "/dev/tty.usbserial-AR0JQZGS"   # receiving XBee port (try /dev/cu.usbserial-AR0JQZGS if tty fails)
-BAUD = 9600                            # must match XCTU config
-TIMEOUT = 1                            # seconds
+# --- XBee Configuration ---
+LOCAL_XBEE_PORT = "COM4" # Replace with your local XBee's serial port
 
-def main():
-    # Open the serial port
-    ser = serial.Serial(PORT, BAUD, timeout=TIMEOUT)
-    print(f"[INFO] Listening for HEARTBEATs on {PORT} @ {BAUD} baud... Ctrl+C to stop.")
+try:
+    # Initialize local XBee device
+    local_xbee = XBeeDevice(LOCAL_XBEE_PORT, 9600)
+    local_xbee.open()
 
-    # Create MAVLink parser
-    mav = mavlink2.MAVLink(ser)
-    mav.WIRE_PROTOCOL_VERSION = "2.0"
+    print("XBee connected. Waiting for MAVLink messages...")
 
-    try:
-        while True:
-            byte = ser.read(1)  # read one byte at a time
-            if not byte:
-                continue
+    while True:
+        # Read data from XBee
+        xbee_message = local_xbee.read_data()
 
-            msg = mav.parse_char(byte)
-            if msg and msg.get_type() == "HEARTBEAT":
-                print(f"❤️  HEARTBEAT from sys={msg.get_srcSystem()}, comp={msg.get_srcComponent()} "
-                      f"type={msg.type}, autopilot={msg.autopilot}, "
-                      f"base_mode={msg.base_mode}, custom_mode={msg.custom_mode}, "
-                      f"system_status={msg.system_status}")
+        if xbee_message is not None:
+            mavlink_data = xbee_message.data
+            # Process MAVLink data (e.g., print message type)
+            try:
+                msg = mavutil.mavlink.MAVLink_message.decode(mavlink_data)
+                print(f"Received MAVLink message: {msg.get_type()}")
+            except mavutil.mavlink.MAVLink_error as e:
+                print(f"Error decoding MAVLink message: {e}")
 
-    except KeyboardInterrupt:
-        print("\n[INFO] Listener stopped.")
-    finally:
-        ser.close()
-        print("[INFO] Port closed.")
+        time.sleep(0.1) # Check for new data frequently
 
-if __name__ == "__main__":
-    main()
+except Exception as e:
+    print(f"Error: {e}")
+
+finally:
+    if 'local_xbee' in locals() and local_xbee.is_open():
+        local_xbee.close()
+        print("XBee connection closed.")
