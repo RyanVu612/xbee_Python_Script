@@ -1,49 +1,50 @@
-from digi.xbee.devices import XBeeDevice, RemoteXBeeDevice
-from digi.xbee.models import XBee64BitAddress
+from digi.xbee.devices import DigiMeshDevice, RemoteXBeeDevice
+from digi.xbee.models.address import XBee64BitAddress
+from digi.xbee.exception import XBeeException
 from pymavlink import mavutil
 import time
 
-# --- XBee Configuration ---
-LOCAL_XBEE_PORT = "/dev/cu.USB#AQ015EBI"  # Replace with your local XBee's serial port
-REMOTE_XBEE_ADDRESS = "0013A20041D365C4" # Replace with the 64-bit address of the remote XBee
+PORT = "/dev/cu.usbserial-AQ015EBI"   # from your diagnostic
+BAUD = 9600                           # BD=3 on the radio
+REMOTE_ADDR = "0013A20041D365C4"      # remote node 64-bit (SH+SL)
 
-# --- MAVLink Configuration ---
-# Create a MAVLink connection (e.g., to a flight controller or simulator)
-# This example uses a UDP connection to a local simulator on port 14550
-# Adjust as needed for your setup (e.g., serial connection to a flight controller)
-master = mavutil.mavlink_connection('udpout:localhost:14550', baud=115200)
+# MAVLink over UDP (baud irrelevant here)
+master = mavutil.mavlink_connection('udpout:localhost:14550')
 
-try:
-    # Initialize local XBee device
-    local_xbee = XBeeDevice(LOCAL_XBEE_PORT, 9600)
-    local_xbee.open()
+def main():
+    xbee = DigiMeshDevice(PORT, BAUD)
+    try:
+        xbee.open()
+        # Sanity: ensure we’re really on DigiMesh+API
+        assert xbee.get_protocol().name == "DIGI_MES"
+        "H"
 
-    # Initialize remote XBee device
-    remote_xbee = RemoteXBeeDevice(local_xbee, XBee64BitAddress.from_hex_string(REMOTE_XBEE_ADDRESS))
+        remote = RemoteXBeeDevice(xbee, XBee64BitAddress.from_hex_string(REMOTE_ADDR))
+        print("XBee connected. Sending MAVLink heartbeats...")
 
-    print("XBee connected. Sending MAVLink heartbeats...")
+        while True:
+            hb = master.mav.heartbeat_encode(
+                mavutil.mavlink.MAV_TYPE_GENERIC,
+                mavutil.mavlink.MAV_AUTOPILOT_GENERIC,
+                0, 0, 0, 0
+            )
+            payload = hb.pack(master.mav)
+            try:
+                xbee.send_data(remote, bytes(payload))
+                print("Sent MAVLink heartbeat")
+            except XBeeException as e:
+                # Print precise TX cause if the radio reports one
+                status = getattr(e, "status", None)
+                if status is not None:
+                    print(f"TX Error: {status.name} ({status.value})")
+                else:
+                    print("TX Error:", repr(e))
+            time.sleep(1)
 
-    while True:
-        # Create a MAVLink heartbeat message
-        heartbeat_msg = master.mav.heartbeat_encode(
-            mavutil.mavlink.MAV_TYPE_GENERIC,
-            mavutil.mavlink.MAV_AUTOPILOT_GENERIC,
-            0, 0, 0, 0
-        )
+    finally:
+        if 'xbee' in locals() and xbee.is_open():
+            xbee.close()
+            print("XBee connection closed.")
 
-        # Convert MAVLink message to bytes
-        mavlink_data = heartbeat_msg.pack(master.mav)
-
-        # Send MAVLink data via XBee
-        local_xbee.send_data(remote_xbee, mavlink_data)
-        print(f"Sent MAVLink heartbeat: {heartbeat_msg.get_type()}")
-
-        time.sleep(1) # Send every second
-
-except Exception as e:
-    print(f"Error: {e}")
-
-finally:
-    if 'local_xbee' in locals() and local_xbee.is_open():
-        local_xbee.close()
-        print("XBee connection closed.")
+if __name__ == "__main__":
+    main()
